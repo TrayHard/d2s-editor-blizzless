@@ -376,6 +376,7 @@ const xp = [0, 500, 1500, 3750, 7875, 14175, 22680, 32886, 44396, 57715, 72144, 
       const prisonBonus = this.computePrisonOfIceAllRes();
       // Salvation aura bonus
       const salvation = this.computeSalvationAuraBonus();
+      const naturalRes = this.computeBarbarianNaturalResistance();
       const getValue = (attr) => {
         if (!attr) return 0;
         if (typeof attr.value === 'number') return attr.value;
@@ -401,10 +402,10 @@ const xp = [0, 500, 1500, 3750, 7875, 14175, 22680, 32886, 44396, 57715, 72144, 
       // Add all-res bonus (quests) to each resist as requested instead of showing separately
       const addAllRes = prisonBonus;
       // Add Salvation aura to fire/light/cold
-      sums.fire += addAllRes + salvation;
-      sums.light += addAllRes + salvation;
-      sums.cold += addAllRes + salvation;
-      sums.poison += addAllRes; // Salvation doesn't affect poison
+      sums.fire += addAllRes + salvation + naturalRes;
+      sums.light += addAllRes + salvation + naturalRes;
+      sums.cold += addAllRes + salvation + naturalRes;
+      sums.poison += addAllRes + naturalRes; // Salvation doesn't affect poison
       // Apply difficulty penalty
       const applyPenaltyAndCap = (val, maxAdd) => {
         const maxRes = capBase + Math.floor(maxAdd || 0);
@@ -482,6 +483,62 @@ const xp = [0, 500, 1500, 3750, 7875, 14175, 22680, 32886, 44396, 57715, 72144, 
       if (maxAuraLevel === 3) return 75;
       if (maxAuraLevel === 2) return 68;
       return 60; // level 1
+    },
+    computeBarbarianNaturalResistance() {
+      // Only applies to Barbarian; compute total level of Natural Resistance including +skills
+      const constants = this.$getWorkConstantData();
+      if ((this.save?.header?.class || '').toLowerCase() !== 'barbarian') return 0;
+      // Find the skill id for Natural Resistance
+      let naturalId = null;
+      for (const sid in constants.skills || {}) {
+        const sk = constants.skills[sid];
+        if (sk?.n === 'Natural Resistance') { naturalId = parseInt(sid, 10); break; }
+      }
+      if (naturalId == null) return 0;
+      // Base points
+      const basePoints = (this.save?.skills || []).find(s => s.id === naturalId)?.points || 0;
+      // + to specific skill from gear
+      let plusSpecific = 0;
+      // + to class skills (Barbarian)
+      let plusClass = 0;
+      // + to skill tab (Masteries) for Barbarian (tab index: try to detect by skill's class tab id if present)
+      let plusTab = 0;
+      // + all skills
+      let plusAll = 0;
+      const isBarbarianClassId = constants.classes.find(c => c?.n === 'Barbarian')?.id;
+      // We need to infer Natural Resistance's tab; try to read from SkillDesc or fallback to tab 1 (Masteries)
+      // If constants has SkillDesc mapping, it would be ideal; as a heuristic, use tab 1 for Barbarian Masteries
+      const masteryTabIdx = 1;
+      for (const item of this.equippedAndInventory) {
+        const attrs = (item && Array.isArray(item.combined_magic_attributes)) ? item.combined_magic_attributes : [];
+        for (const a of attrs) {
+          if (!a || typeof a.name !== 'string') continue;
+          const val = (typeof a.value === 'number') ? a.value : (Array.isArray(a.values) ? (a.values[a.values.length - 1] || 0) : 0);
+          if (!val) continue;
+          if (a.name === 'item_allskills') plusAll += val;
+          else if (a.name === 'item_addclassskills') {
+            const cid = Array.isArray(a.values) ? a.values[0] : null;
+            if (cid === isBarbarianClassId) plusClass += val;
+          } else if (a.name === 'item_addskill_tab') {
+            const tab = Array.isArray(a.values) ? a.values[0] : null;
+            const cid = Array.isArray(a.values) ? a.values[1] : null;
+            if (cid === isBarbarianClassId && tab === masteryTabIdx) plusTab += val;
+          } else if (a.name === 'item_singleskill' || a.name === 'item_nonclassskill' || a.df === 27 || a.df === 28) {
+            const sid = Array.isArray(a.values) ? a.values[0] : null;
+            if (sid === naturalId) plusSpecific += val;
+          }
+        }
+      }
+      const totalLevel = basePoints + plusSpecific + plusClass + plusTab + plusAll;
+      if (totalLevel <= 0) return 0;
+      // Map level -> resist % using provided table ranges
+      const table = [
+        0,12,21,28,35,40,44,47,49,52,54,56,58,60,61,62,64,64,65,66,67,
+        68,68,69,70,70,71,72,72,72,72,73,73,74,74,74,75,75,76,76,76,
+        76,76,76,76,77,77,77,77,78,78,78,78,78,79,79,79,79,79,79,80
+      ];
+      const lvl = Math.max(1, Math.min(totalLevel, table.length - 1));
+      return table[lvl] || 0;
     }
   },
   watch: {
